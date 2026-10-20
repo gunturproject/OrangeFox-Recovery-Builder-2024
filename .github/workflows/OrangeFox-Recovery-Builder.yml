@@ -30,7 +30,7 @@ on:
         required: true
         default: 'recoveryimage'
         type: choice
-        options: ['recoveryimage', 'bootimage', 'vendorbootimage']
+        options: ['recoveryimage']
       REPO_SYNC_JOBS:
         description: 'Parallel repository sync jobs (increase carefully if network/disk is constrained)'
         required: true
@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           [[ '${{ inputs.DEVICE_PATH }}' =~ ^[A-Za-z0-9_./-]+$ ]]
           [[ '${{ inputs.DEVICE_NAME }}' =~ ^[A-Za-z0-9_-]+$ ]]
-          [[ '${{ inputs.BUILD_TARGET }}' =~ ^(recoveryimage|bootimage|vendorbootimage)$ ]]
+          [[ '${{ inputs.BUILD_TARGET }}' == 'recoveryimage' ]]
           [[ '${{ inputs.REPO_SYNC_JOBS }}' =~ ^([2-9]|1[0-6])$ ]]
 
       - name: Free disk space safely
@@ -138,6 +138,8 @@ jobs:
           echo "DEVICE_TREE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
           grep -q 'PRODUCT_MODEL := Infinix X6515' omni_Infinix-X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
+          grep -Eq '^BOARD_SUPER_PARTITION_SIZE[[:space:]]*:=[[:space:]]*6723633152([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: BOARD_SUPER_PARTITION_SIZE differs from stock scatter (0x190c28000).'; exit 1; }
+          grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition group size does not reserve 4 MiB within stock SUPER.'; exit 1; }
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
           [[ -n "$DATA_FSTAB" ]] || { echo 'ERROR: no /data mount in recovery.fstab'; exit 1; }
           echo "$DATA_FSTAB" | grep -q 'f2fs' || { echo 'ERROR: /data filesystem differs from stock XOS f2fs'; exit 1; }
@@ -150,7 +152,7 @@ jobs:
           echo "Tree fingerprint: ${TREE_FP:-not declared}"
           echo "Stock firmware fingerprint from supplied boot image: $EXPECTED_FP"
           [[ "$TREE_FP" == "$EXPECTED_FP" ]] || { echo 'ERROR: device tree fingerprint does not match the supplied stock XOS firmware; update/review the tree before building.'; exit 1; }
-          grep -q 'PRIVATE_BUILD_DESC=\"vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys\"' omni_Infinix-X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
+          grep -Fq 'PRIVATE_BUILD_DESC="vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys"' omni_Infinix-X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
           echo '--- Userdata fstab line ---'
           if grep -E 'fileencryption|metadata_encryption|encryptable=|forceencrypt=|wrappedkey|keydirectory=' recovery.fstab; then
             echo 'Encryption-related fstab flags are present; runtime decryption still requires on-device tests.'
@@ -173,7 +175,7 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           lunch omni_${{ inputs.DEVICE_NAME }}-eng
-          mka -j2 '${{ inputs.BUILD_TARGET }}'
+          mka -j2 adbd recoveryimage
 
       - name: Validate output image
         id: image
@@ -181,11 +183,10 @@ jobs:
         run: |
           set -euo pipefail
           OUT="$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}"
-          case '${{ inputs.BUILD_TARGET }}' in
-            recoveryimage) IMAGE="$OUT/recovery.img" ;;
-            bootimage) IMAGE="$OUT/boot.img" ;;
-            vendorbootimage) IMAGE="$OUT/vendor_boot.img" ;;
-          esac
+          IMAGE="$OUT/recovery.img"
+          if [[ ! -s "$IMAGE" ]]; then
+            IMAGE=$(find "$OUT" -maxdepth 1 -type f -name 'OrangeFox*.img' -size +0c -print -quit)
+          fi
           if [[ ! -s "$IMAGE" ]]; then
             echo 'ERROR: expected output image is missing or empty.'
             find "$OUT" -maxdepth 3 -type f -printf '%p (%s bytes)\n' 2>/dev/null || true
