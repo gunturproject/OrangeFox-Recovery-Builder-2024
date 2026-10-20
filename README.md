@@ -8,7 +8,7 @@ Open **Actions → OrangeFox - Build X6515 → Run workflow**. Reviewed defaults
 
 - OrangeFox manifest: `12.1` (`fox_12.1`)
 - Device tree: `gunturproject/android_device_infinix_Infinix-X6515`
-- Device tree branch: `vnd_x6515_h6127-user-12-SP1A.210812.016-308958-release-keys`
+- Device tree branch: `manus/x6515-boot-offset-audit-20261020` (review branch)
 - Target: `bootimage` (recovery-as-boot)
 - Size mode: `standard`
 - Repo sync jobs: `16`
@@ -25,9 +25,11 @@ The workflow uses the OrangeFox vanilla profile and disables MIUI-specific featu
 
 ## Validation and artifacts
 
-Before compiling, CI checks the X6515 product/tree identity, MT6761 target, prebuilt kernel and DTB hashes, boot header v2 parameters, explicit kernel/ramdisk/tags/DTB offsets, the 32 MiB partition limit, F2FS and fstab crypto configuration, stock fingerprint, and selected recovery modules. After building, it verifies the output's absolute kernel, ramdisk, tags, and 64-bit DTB load addresses against the supplied stock header. It records the device-tree commit, OrangeFox sync-script commit, resolved `manifest.lock.xml`, build provenance, image SHA-256, and image artifact. Output validation is structural only; CI does not boot or flash the image.
+Before compiling, CI runs the strict source-tree validator and its Python regression suite, then checks the X6515 product/tree identity, MT6761 target, prebuilt kernel and DTB hashes, boot header v2 parameters, explicit kernel/ramdisk/tags/DTB offsets, the 32 MiB partition limit, F2FS and fstab crypto configuration, stock fingerprint, and selected recovery modules. After building, it verifies the output boot header, component ranges, stock-derived kernel/DTB identity, gzip/newc ramdisk, init files, and required executables. It records the device-tree commit, OrangeFox sync-script commit, resolved `manifest.lock.xml`, build provenance, image SHA-256, and image artifact. Output validation is structural only; CI does not boot or flash the image.
 
-The artifact contains `boot.img`, its SHA-256 sidecar, source commit identifiers, provenance, and the resolved manifest lockfile. Builds are uploaded as workflow artifacts; this workflow does not publish a GitHub Release or flash a device.
+The artifact is named `OrangeFox-CANDIDATE-...` and contains `boot.img`, its SHA-256 sidecar, source commit identifiers, provenance, and the resolved manifest lockfile. Builds are uploaded as workflow artifacts; this workflow does not publish a GitHub Release or flash a device. The workflow summary explicitly states that passing CI does not certify runtime features.
+
+For the fail-closed release evidence gate, use the device tree's [strict validation guide](https://github.com/gunturproject/android_device_infinix_Infinix-X6515/blob/manus/x6515-boot-offset-audit-20261020/docs/STRICT-VALIDATION.md). It requires intact firmware plus hashed evidence for every required feature; those tests are not simulated or inferred by hosted CI.
 
 ## Important compatibility limits
 
@@ -35,4 +37,4 @@ A compile does not prove touchscreen, display, brightness, USB/ADB/MTP/OTG, slot
 
 The scatter file gives the physical `super` capacity but cannot prove logical partition extents; use a clean production `super.img` and `lpdump`. The supplied package lists A/B vendor_boot partitions but no vendor_boot image payload, so this workflow builds only `boot.img` and does not assert the contents or runtime role of vendor_boot.
 
-Do not permanently flash an untested image. Keep and test a stock firmware recovery path, and validate all required functions on the exact X6515/H6127 firmware first. See the device-tree README and `tools/validate_x6515_firmware.py` for the read-only static firmware audit.
+Do not permanently flash an untested image. Keep and test a stock firmware recovery path, and validate all required functions on the exact X6515/H6127 firmware first. See the device-tree README, `tools/validate_x6515_firmware.py`, and `tools/strict_x6515_validator.py` for read-only firmware, source, and image checks.

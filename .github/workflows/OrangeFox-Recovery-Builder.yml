@@ -16,7 +16,7 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'Device tree branch'
         required: true
-        default: 'vnd_x6515_h6127-user-12-SP1A.210812.016-308958-release-keys'
+        default: 'manus/x6515-boot-offset-audit-20261020'
       DEVICE_PATH:
         description: 'Device tree path'
         required: true
@@ -276,6 +276,8 @@ jobs:
           if [[ ! -s proprietary-files.txt ]] || ! grep -Eq '^[[:space:]]*[^#[:space:]]' proprietary-files.txt; then
             echo '::warning::No audited proprietary-files.txt: build output does not establish vendor/Keymaster/TEE support or encrypted /data decryption.'
           fi
+          python3 tools/strict_x6515_validator.py --mode tree --device-tree .
+          python3 -m unittest discover -s tests -v
 
       - name: Build OrangeFox recovery
         shell: bash
@@ -386,6 +388,9 @@ jobs:
               raise SystemExit(f'ERROR: output load addresses differ from stock header: actual={actual}, expected={expected}.')
           print(f'Boot image structural check OK: v{header_version}, page={page_size}, kernel={kernel_size}@{kernel_addr:#x}, ramdisk={ramdisk_size}@{ramdisk_addr:#x}, dtb={dtb_size}@{dtb_addr:#x}.')
           PY
+          TREE="$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}/$DEVICE_PATH"
+          python3 "$TREE/tools/strict_x6515_validator.py" --mode image --device-tree "$TREE" --image "$IMAGE"
+          echo '::warning::This is a build candidate only. No physical-device feature test has been run; do not describe it as 100% compatible.'
           file "$IMAGE"
           sha256sum "$IMAGE" | tee "$IMAGE.sha256"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
@@ -393,7 +398,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OrangeFox-${{ inputs.DEVICE_NAME }}-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.SIZE_MODE }}-${{ github.run_number }}
+          name: OrangeFox-CANDIDATE-${{ inputs.DEVICE_NAME }}-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.SIZE_MODE }}-${{ github.run_number }}
           path: |
             ${{ steps.image.outputs.image }}
             ${{ steps.image.outputs.image }}.sha256
@@ -403,3 +408,15 @@ jobs:
             provenance.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Record certification boundary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo '## Validation status'
+            echo '- Source and built-image static checks passed.'
+            echo '- This artifact is a **candidate**, not a device-certified recovery.'
+            echo '- Physical tests, intact super/vendor evidence, and vendor crypto/TEE verification are required for release certification.'
+            echo '- See the device-tree `docs/STRICT-VALIDATION.md` for the fail-closed release gate and test matrix.'
+          } >> "$GITHUB_STEP_SUMMARY"
