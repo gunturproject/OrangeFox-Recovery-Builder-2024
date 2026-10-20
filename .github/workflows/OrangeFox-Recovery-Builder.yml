@@ -141,6 +141,9 @@ jobs:
           grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
           grep -q 'PRODUCT_MODEL := Infinix X6515' omni_Infinix_X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
           grep -q 'PRODUCT_NAME := omni_Infinix_X6515' omni_Infinix_X6515.mk || { echo 'ERROR: Android product name must use the underscore-safe identifier.'; exit 1; }
+          if grep -q 'PRODUCT_STATIC_BOOT_CONTROL_HAL' device.mk; then echo 'ERROR: obsolete static boot-control HAL property must not be used.'; exit 1; fi
+          grep -Fq 'android.hardware.boot@1.0-impl.recovery' device.mk || { echo 'ERROR: recovery boot HAL implementation variant is missing.'; exit 1; }
+          grep -Fq 'bootctrl.mt6761.recovery' device.mk || { echo 'ERROR: MT6761 recovery boot-control HAL variant is missing.'; exit 1; }
           grep -Eq '^BOARD_SUPER_PARTITION_SIZE[[:space:]]*:=[[:space:]]*6723633152([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: BOARD_SUPER_PARTITION_SIZE differs from stock scatter (0x190c28000).'; exit 1; }
           grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition group size must preserve the verified 4 MiB headroom within stock SUPER.'; exit 1; }
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
