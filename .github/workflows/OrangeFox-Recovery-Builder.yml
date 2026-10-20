@@ -200,6 +200,8 @@ jobs:
           # Official guidance recommends vanilla mode and disabling MIUI-only features for non-Xiaomi devices.
           export FOX_VANILLA_BUILD=1
           export OF_DISABLE_MIUI_SPECIFIC_FEATURES=1
+          # Official OrangeFox size remedy: trim source large files/fonts; leave ramdisk compression as gzip because stock kernel lacks RD_LZMA.
+          export FOX_DRASTIC_SIZE_REDUCTION=1
           set +e
           source build/envsetup.sh
           ENVSETUP_RC=$?
@@ -225,6 +227,13 @@ jobs:
           if [[ ! -s "$IMAGE" ]]; then
             echo 'ERROR: expected non-empty boot.img recovery-as-boot output is missing.'
             find "$OUT" -maxdepth 3 -type f -printf '%p (%s bytes)\n' 2>/dev/null || true
+            exit 1
+          fi
+          IMAGE_BYTES=$(stat -c '%s' "$IMAGE")
+          MAX_BOOT_BYTES=33554432
+          echo "boot.img bytes: $IMAGE_BYTES; stock boot_a partition bytes: $MAX_BOOT_BYTES"
+          if (( IMAGE_BYTES > MAX_BOOT_BYTES )); then
+            echo 'ERROR: boot.img exceeds the verified 32 MiB stock boot_a partition; do not flash this image.'
             exit 1
           fi
           file "$IMAGE"
