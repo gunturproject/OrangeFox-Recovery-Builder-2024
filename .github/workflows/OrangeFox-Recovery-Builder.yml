@@ -69,6 +69,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/OrangeFox"
           git clone --depth=1 https://gitlab.com/OrangeFox/sync.git "$RUNNER_TEMP/of-sync"
+          cp -a "$RUNNER_TEMP/of-sync/patches" "$GITHUB_WORKSPACE/patches"
           bash "$RUNNER_TEMP/of-sync/orangefox_sync.sh" --branch '${{ inputs.MANIFEST_BRANCH }}' --path "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
 
       - name: Fetch and audit X6515 device tree
