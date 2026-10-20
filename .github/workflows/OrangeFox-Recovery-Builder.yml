@@ -111,24 +111,8 @@ jobs:
           import pathlib, sys
           path = pathlib.Path(sys.argv[1])
           text = path.read_text()
-          old = '''repo_sync() {
-	repo sync --force-sync -c -j$(nproc --all) --no-clone-bundle --no-tags "$@";
-}'''
-          new = '''repo_sync() {
-	local attempt=1
-	local rc=0
-	while [ "$attempt" -le 3 ]; do
-		if repo sync --force-sync -c -j${REPO_SYNC_JOBS:-$(nproc --all)} --no-clone-bundle --no-tags "$@"; then
-			return 0
-		else
-			rc=$?
-		fi
-		echo "repo sync failed (attempt $attempt/3, rc=$rc); retrying after backoff"
-		sleep $((attempt * 15))
-		attempt=$((attempt + 1))
-	done
-	return "$rc"
-}'''
+          old = 'repo_sync() {\n\trepo sync --force-sync -c -j$(nproc --all) --no-clone-bundle --no-tags "$@";\n}'
+          new = 'repo_sync() {\n  local attempt=1\n  local rc=0\n  while [ "$attempt" -le 3 ]; do\n    if repo sync --force-sync -c -j${REPO_SYNC_JOBS:-$(nproc --all)} --no-clone-bundle --no-tags "$@"; then\n      return 0\n    else\n      rc=$?\n    fi\n    echo "repo sync failed (attempt $attempt/3, rc=$rc); retrying after backoff"\n    sleep $((attempt * 15))\n    attempt=$((attempt + 1))\n  done\n  return "$rc"\n}'
           if old not in text:
               raise SystemExit('OrangeFox repo_sync function changed; refusing an unverified retry patch')
           path.write_text(text.replace(old, new, 1))
