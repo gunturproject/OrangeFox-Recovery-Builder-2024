@@ -151,6 +151,14 @@ jobs:
           if grep -q 'PRODUCT_STATIC_BOOT_CONTROL_HAL' device.mk; then echo 'ERROR: obsolete static boot-control HAL property must not be used.'; exit 1; fi
           grep -Fq 'android.hardware.boot@1.0-impl.recovery' device.mk || { echo 'ERROR: recovery boot HAL implementation variant is missing.'; exit 1; }
           grep -Fq 'bootctrl.mt6761.recovery' device.mk || { echo 'ERROR: MT6761 recovery boot-control HAL variant is missing.'; exit 1; }
+          grep -Fq 'TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"' BoardConfig.mk || { echo 'ERROR: stock MTK lcd-backlight sysfs path is not configured.'; exit 1; }
+          grep -Eq '^TW_MAX_BRIGHTNESS[[:space:]]*:=[[:space:]]*255([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: X6515 MTK LED-class range must be configured as 0-255.'; exit 1; }
+          test -s prebuilt/kernel || { echo 'ERROR: X6515 prebuilt kernel is missing.'; exit 1; }
+          KERNEL_RAW="$(mktemp)"
+          if gzip -t prebuilt/kernel >/dev/null 2>&1; then gzip -dc prebuilt/kernel > "$KERNEL_RAW"; else cp prebuilt/kernel "$KERNEL_RAW"; fi
+          strings -a "$KERNEL_RAW" | grep -Fq 'lcd-backlight' || { rm -f "$KERNEL_RAW"; echo 'ERROR: prebuilt kernel lacks the expected lcd-backlight marker.'; exit 1; }
+          strings -a "$KERNEL_RAW" | grep -Fq 'mtk_leds' || { rm -f "$KERNEL_RAW"; echo 'ERROR: prebuilt kernel lacks the expected MTK LEDs marker.'; exit 1; }
+          rm -f "$KERNEL_RAW"
           grep -Eq '^BOARD_SUPER_PARTITION_SIZE[[:space:]]*:=[[:space:]]*6723633152([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: BOARD_SUPER_PARTITION_SIZE differs from stock scatter (0x190c28000).'; exit 1; }
           grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition group size must preserve the verified 4 MiB headroom within stock SUPER.'; exit 1; }
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
