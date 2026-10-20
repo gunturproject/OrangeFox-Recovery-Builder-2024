@@ -16,7 +16,7 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'Device tree branch'
         required: true
-        default: 'vnd_x6515_h6127-user-12-SP1A.210812.016-308958-release-keys'
+        default: 'manus/x6515-boot-offset-audit-20261020'
       DEVICE_PATH:
         description: 'Device tree path'
         required: true
@@ -31,6 +31,12 @@ on:
         default: 'bootimage'
         type: choice
         options: ['bootimage']
+      SIZE_MODE:
+        description: 'Use experimental feature-removing ramdisk reduction only if standard image exceeds the stock limit'
+        required: true
+        default: 'standard'
+        type: choice
+        options: ['standard', 'drastic']
       REPO_SYNC_JOBS:
         description: 'Parallel repository sync jobs (increase carefully if network/disk is constrained)'
         required: true
@@ -49,18 +55,60 @@ jobs:
     name: Build and verify X6515 recovery
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
+      DEVICE_TREE: ${{ inputs.DEVICE_TREE }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
+      DEVICE_PATH: ${{ inputs.DEVICE_PATH }}
+      DEVICE_NAME: ${{ inputs.DEVICE_NAME }}
+      BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
+      SIZE_MODE: ${{ inputs.SIZE_MODE }}
+      REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
     steps:
       - name: Checkout builder
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Validate inputs
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ inputs.DEVICE_PATH }}' =~ ^[A-Za-z0-9_./-]+$ ]]
-          [[ '${{ inputs.DEVICE_NAME }}' =~ ^[A-Za-z0-9_-]+$ ]]
-          [[ '${{ inputs.BUILD_TARGET }}' == 'bootimage' ]]
-          [[ '${{ inputs.REPO_SYNC_JOBS }}' =~ ^([2-9]|1[0-9]|2[0-4])$ ]]
+          python3 - <<'PY'
+          import os
+          import re
+          from urllib.parse import urlsplit
+
+          branch = os.environ['MANIFEST_BRANCH']
+          tree_url = os.environ['DEVICE_TREE']
+          tree_branch = os.environ['DEVICE_TREE_BRANCH']
+          tree_path = os.environ['DEVICE_PATH']
+          device_name = os.environ['DEVICE_NAME']
+          target = os.environ['BUILD_TARGET']
+          size_mode = os.environ['SIZE_MODE']
+          sync_jobs = os.environ['REPO_SYNC_JOBS']
+
+          if branch != '12.1':
+              raise SystemExit('Only the reviewed OrangeFox 12.1 manifest is allowed.')
+          parsed = urlsplit(tree_url)
+          if (parsed.scheme != 'https' or parsed.hostname != 'github.com' or
+                  parsed.username or parsed.password or parsed.query or parsed.fragment or
+                  not re.fullmatch(r'/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?', parsed.path)):
+              raise SystemExit('DEVICE_TREE must be an HTTPS GitHub owner/repository URL.')
+          if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,127}', tree_branch) or '..' in tree_branch:
+              raise SystemExit('DEVICE_TREE_BRANCH contains unsupported characters or path traversal.')
+          if not re.fullmatch(r'[A-Za-z0-9_./-]{1,128}', tree_path) or tree_path.startswith('/') or any(part in ('', '.', '..') for part in tree_path.split('/')):
+              raise SystemExit('DEVICE_PATH must be a normalized relative path without dot segments.')
+          if device_name != 'Infinix-X6515':
+              raise SystemExit('This workflow only supports the reviewed Infinix-X6515 target.')
+          if target != 'bootimage':
+              raise SystemExit('This workflow only packages the reviewed recovery-as-boot image.')
+          if size_mode not in ('standard', 'drastic'):
+              raise SystemExit('SIZE_MODE must be standard or drastic.')
+          if not sync_jobs.isdecimal() or not 2 <= int(sync_jobs) <= 24:
+              raise SystemExit('REPO_SYNC_JOBS must be an integer from 2 through 24.')
+          PY
+          git check-ref-format --branch "$DEVICE_TREE_BRANCH"
 
       - name: Free disk space safely
         shell: bash
@@ -97,8 +145,6 @@ jobs:
 
       - name: Sync OrangeFox manifest
         shell: bash
-        env:
-          REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
         run: |
           set -euo pipefail
           git config --global http.maxRequests 32
@@ -117,28 +163,44 @@ jobs:
               raise SystemExit('OrangeFox repo_sync function changed; refusing an unverified retry patch')
           path.write_text(text.replace(old, new, 1))
           PYCODE
-          bash "$RUNNER_TEMP/of-sync/orangefox_sync.sh" --branch '${{ inputs.MANIFEST_BRANCH }}' --path "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
+          bash "$RUNNER_TEMP/of-sync/orangefox_sync.sh" --branch "$MANIFEST_BRANCH" --path "$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}"
+          git -C "$RUNNER_TEMP/of-sync" rev-parse HEAD > "$GITHUB_WORKSPACE/orangefox-sync.commit"
+          cd "$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}"
+          repo manifest -r > "$GITHUB_WORKSPACE/manifest.lock.xml"
+          {
+            printf 'manifest_branch=%s\n' "$MANIFEST_BRANCH"
+            printf 'sync_commit=%s\n' "$(cat "$GITHUB_WORKSPACE/orangefox-sync.commit")"
+            printf 'device_tree_url=%s\n' "$DEVICE_TREE"
+            printf 'device_tree_branch=%s\n' "$DEVICE_TREE_BRANCH"
+            printf 'device_path=%s\n' "$DEVICE_PATH"
+            printf 'device_name=%s\n' "$DEVICE_NAME"
+            printf 'build_target=%s\n' "$BUILD_TARGET"
+            printf 'size_mode=%s\n' "$SIZE_MODE"
+            date -u '+build_started_utc=%Y-%m-%dT%H:%M:%SZ'
+          } > "$GITHUB_WORKSPACE/provenance.txt"
 
       - name: Report disk usage after manifest sync
         shell: bash
         run: |
           set -euo pipefail
           df -h "$GITHUB_WORKSPACE"
-          du -sh "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}" "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/.repo" 2>/dev/null || true
+          du -sh "$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}" "$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}/.repo" 2>/dev/null || true
 
       - name: Fetch and audit X6515 device tree
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
+          cd "$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}"
           test -s vendor/twrp/config/common.mk || { echo 'ERROR: OrangeFox/TWRP common product config is missing from the synced manifest.'; exit 1; }
-          mkdir -p "$(dirname '${{ inputs.DEVICE_PATH }}')"
-          git clone --depth=1 --branch '${{ inputs.DEVICE_TREE_BRANCH }}' '${{ inputs.DEVICE_TREE }}' '${{ inputs.DEVICE_PATH }}'
-          cd '${{ inputs.DEVICE_PATH }}'
+          mkdir -p "$(dirname "$DEVICE_PATH")"
+          git clone --depth=1 --single-branch --branch "$DEVICE_TREE_BRANCH" -- "$DEVICE_TREE" "$DEVICE_PATH"
+          cd "$DEVICE_PATH"
           test -s BoardConfig.mk
           test -s recovery.fstab
           test -s AndroidProducts.mk
-          echo "DEVICE_TREE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          TREE_COMMIT="$(git rev-parse HEAD)"
+          printf '%s\n' "$TREE_COMMIT" > "$GITHUB_WORKSPACE/device-tree.commit"
+          printf 'DEVICE_TREE_COMMIT=%s\n' "$TREE_COMMIT" >> "$GITHUB_ENV"
           grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
           grep -q 'PRODUCT_MODEL := Infinix X6515' twrp_Infinix_X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
           grep -Fxq 'PRODUCT_BRAND := Infinix' twrp_Infinix_X6515.mk || { echo 'ERROR: product brand differs from stock XOS.'; exit 1; }
@@ -149,10 +211,16 @@ jobs:
           grep -Fq 'COMMON_LUNCH_CHOICES := twrp_Infinix_X6515-eng' AndroidProducts.mk || { echo 'ERROR: expected TWRP eng lunch target is missing.'; exit 1; }
           grep -Eq '^BOARD_USES_RECOVERY_AS_BOOT[[:space:]]*:=[[:space:]]*true([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: X6515 is expected to package recovery into boot.img.'; exit 1; }
           grep -Fxq 'BOARD_BOOTIMG_HEADER_VERSION := 2' BoardConfig.mk || { echo 'ERROR: boot header version differs from stock X6515 header v2.'; exit 1; }
-          grep -Fxq 'BOARD_KERNEL_BASE := 0x40078000' BoardConfig.mk || { echo 'ERROR: kernel base differs from stock boot header.'; exit 1; }
+          grep -Fxq 'BOARD_KERNEL_BASE := 0x40078000' BoardConfig.mk || { echo 'ERROR: base/offset representation differs from the reviewed X6515 configuration; output absolute load addresses are checked separately.'; exit 1; }
+          grep -Fxq 'BOARD_KERNEL_OFFSET := 0x00008000' BoardConfig.mk || { echo 'ERROR: kernel offset differs from the stock boot header address.'; exit 1; }
           grep -Fxq 'BOARD_KERNEL_PAGESIZE := 2048' BoardConfig.mk || { echo 'ERROR: kernel page size differs from stock boot header.'; exit 1; }
           grep -Fxq 'BOARD_RAMDISK_OFFSET := 0x11a88000' BoardConfig.mk || { echo 'ERROR: ramdisk offset differs from stock boot header.'; exit 1; }
           grep -Fxq 'BOARD_KERNEL_TAGS_OFFSET := 0x07808000' BoardConfig.mk || { echo 'ERROR: tags offset differs from stock boot header.'; exit 1; }
+          grep -Fxq 'BOARD_DTB_OFFSET := 0x07808000' BoardConfig.mk || { echo 'ERROR: DTB offset differs from the stock v2 dtb_addr field.'; exit 1; }
+          grep -Fq -- '--kernel_offset $(BOARD_KERNEL_OFFSET)' BoardConfig.mk || { echo 'ERROR: BoardConfig does not pass the kernel load offset to mkbootimg.'; exit 1; }
+          grep -Fq -- '--ramdisk_offset $(BOARD_RAMDISK_OFFSET)' BoardConfig.mk || { echo 'ERROR: BoardConfig does not pass the ramdisk load offset to mkbootimg.'; exit 1; }
+          grep -Fq -- '--tags_offset $(BOARD_KERNEL_TAGS_OFFSET)' BoardConfig.mk || { echo 'ERROR: BoardConfig does not pass the kernel tags offset to mkbootimg.'; exit 1; }
+          grep -Fq -- '--dtb_offset $(BOARD_DTB_OFFSET)' BoardConfig.mk || { echo 'ERROR: BoardConfig does not pass the DTB load offset to mkbootimg.'; exit 1; }
           grep -Fxq 'BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432' BoardConfig.mk || { echo 'ERROR: boot_a is exactly 32 MiB; do not enlarge its declared size.'; exit 1; }
           if grep -Eq '^BOARD_RECOVERYIMAGE_PARTITION_SIZE[[:space:]]*:=' BoardConfig.mk; then echo 'ERROR: separate recovery partition size conflicts with X6515 recovery-as-boot layout.'; exit 1; fi
           if grep -q 'ALLOW_MISSING_DEPENDENCIES' BoardConfig.mk; then echo 'ERROR: allow-missing-dependencies weakens strict module validation.'; exit 1; fi
@@ -173,7 +241,8 @@ jobs:
           strings -a "$KERNEL_RAW" | grep -Fq 'mtk_leds' || { rm -f "$KERNEL_RAW"; echo 'ERROR: prebuilt kernel lacks the expected MTK LEDs marker.'; exit 1; }
           rm -f "$KERNEL_RAW"
           grep -Eq '^BOARD_SUPER_PARTITION_SIZE[[:space:]]*:=[[:space:]]*6723633152([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: BOARD_SUPER_PARTITION_SIZE differs from stock scatter (0x190c28000).'; exit 1; }
-          grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition group size must preserve the verified 4 MiB headroom within stock SUPER.'; exit 1; }
+          grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition build ceiling differs from the reviewed X6515 setting.'; exit 1; }
+          echo '::warning::Dynamic-partition group/extents are not verified by scatter capacity; confirm them from an intact super.img with lpdump.'
           grep -Fxq 'BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs' BoardConfig.mk || { echo 'ERROR: userdata image filesystem must match stock XOS F2FS.'; exit 1; }
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
           [[ -n "$DATA_FSTAB" ]] || { echo 'ERROR: no /data mount in recovery.fstab'; exit 1; }
@@ -204,22 +273,31 @@ jobs:
           else
             echo 'WARNING: no obvious crypto/keymaster configuration references found in device tree.'
           fi
+          if [[ ! -s proprietary-files.txt ]] || ! grep -Eq '^[[:space:]]*[^#[:space:]]' proprietary-files.txt; then
+            echo '::warning::No audited proprietary-files.txt: build output does not establish vendor/Keymaster/TEE support or encrypted /data decryption.'
+          fi
+          python3 tools/strict_x6515_validator.py --mode tree --device-tree .
+          python3 -m unittest discover -s tests -v
 
       - name: Build OrangeFox recovery
         shell: bash
         run: |
           # Capture envsetup's return before errexit; some vendor setup scripts return nonzero after registering helpers.
           set -o pipefail
-          cd "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
+          cd "$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}"
           # Required by OrangeFox: select the device before envsetup processes its build variables.
-          export FOX_BUILD_DEVICE='${{ inputs.DEVICE_NAME }}'
+          export FOX_BUILD_DEVICE="$DEVICE_NAME"
           # Scatter and BoardConfig confirm A/B slots; this is not marked as Virtual A/B.
           export FOX_AB_DEVICE=1
           # Official guidance recommends vanilla mode and disabling MIUI-only features for non-Xiaomi devices.
           export FOX_VANILLA_BUILD=1
           export OF_DISABLE_MIUI_SPECIFIC_FEATURES=1
-          # Official OrangeFox size remedy: trim source large files/fonts; leave ramdisk compression as gzip because stock kernel lacks RD_LZMA.
-          export FOX_DRASTIC_SIZE_REDUCTION=1
+          # Drastic mode is experimental and removes many OrangeFox extras; use only after a standard build exceeds the 32 MiB partition.
+          if [[ "$SIZE_MODE" == drastic ]]; then
+            export FOX_DRASTIC_SIZE_REDUCTION=1
+          else
+            unset FOX_DRASTIC_SIZE_REDUCTION
+          fi
           set +e
           source build/envsetup.sh
           ENVSETUP_RC=$?
@@ -233,14 +311,14 @@ jobs:
             echo 'ERROR: requested TWRP device lunch target is unavailable or its product config failed.'
             exit 1
           fi
-          mka -j2 adbd '${{ inputs.BUILD_TARGET }}'
+          mka -j2 adbd "$BUILD_TARGET"
 
       - name: Diagnose image footprint after build failure
         if: failure()
         continue-on-error: true
         shell: bash
         run: |
-          OUT="$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}"
+          OUT="$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}/out/target/product/${DEVICE_NAME}"
           echo 'Image component sizes (bytes):'
           for path in "$OUT/boot.img" "$OUT/ramdisk-recovery.img" "$OUT/kernel" "$OUT/dtb.img"; do
             [[ ! -f "$path" ]] || stat -c '%s %n' "$path"
@@ -255,7 +333,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          OUT="$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}"
+          OUT="$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}/out/target/product/${DEVICE_NAME}"
           IMAGE="$OUT/boot.img"
           if [[ ! -s "$IMAGE" ]]; then
             echo 'ERROR: expected non-empty boot.img recovery-as-boot output is missing.'
@@ -269,6 +347,50 @@ jobs:
             echo 'ERROR: boot.img exceeds the verified 32 MiB stock boot_a partition; do not flash this image.'
             exit 1
           fi
+          python3 - "$IMAGE" <<'PY'
+          import struct
+          import sys
+          from pathlib import Path
+
+          image = Path(sys.argv[1]).read_bytes()
+          if len(image) < 1660 or image[:8] != b'ANDROID!':
+              raise SystemExit('ERROR: output is not a valid Android boot image header.')
+          kernel_size, kernel_addr = struct.unpack_from('<II', image, 8)
+          ramdisk_size, ramdisk_addr = struct.unpack_from('<II', image, 16)
+          tags_addr = struct.unpack_from('<I', image, 32)[0]
+          page_size = struct.unpack_from('<I', image, 36)[0]
+          header_version = struct.unpack_from('<I', image, 40)[0]
+          header_size = struct.unpack_from('<I', image, 1644)[0]
+          dtb_size = struct.unpack_from('<I', image, 1648)[0]
+          dtb_addr = struct.unpack_from('<Q', image, 1652)[0]
+          if header_version != 2 or page_size != 2048 or header_size < 1660:
+              raise SystemExit(f'ERROR: unexpected boot header v{header_version}, page={page_size}, header_size={header_size}.')
+          def align(value):
+              return (value + page_size - 1) // page_size * page_size
+          kernel_off = page_size
+          ramdisk_off = align(kernel_off + kernel_size)
+          second_size = struct.unpack_from('<I', image, 24)[0]
+          second_off = align(ramdisk_off + ramdisk_size)
+          recovery_dtbo_size, recovery_dtbo_off = struct.unpack_from('<II', image, 1632)
+          if recovery_dtbo_size:
+              recovery_dtbo_off = recovery_dtbo_off or align(second_off + second_size)
+              if recovery_dtbo_off + recovery_dtbo_size > len(image):
+                  raise SystemExit('ERROR: recovery_dtbo exceeds output image bounds.')
+              dtb_off = align(recovery_dtbo_off + recovery_dtbo_size)
+          else:
+              dtb_off = align(second_off + second_size)
+          for name, offset, size in (('kernel', kernel_off, kernel_size), ('ramdisk', ramdisk_off, ramdisk_size), ('dtb', dtb_off, dtb_size)):
+              if size <= 0 or offset + size > len(image):
+                  raise SystemExit(f'ERROR: {name} bounds invalid: offset={offset}, size={size}, image={len(image)}.')
+          expected = {'kernel_addr': 0x40080000, 'ramdisk_addr': 0x51b00000, 'tags_addr': 0x47880000, 'dtb_addr': 0x47880000}
+          actual = {'kernel_addr': kernel_addr, 'ramdisk_addr': ramdisk_addr, 'tags_addr': tags_addr, 'dtb_addr': dtb_addr}
+          if actual != expected:
+              raise SystemExit(f'ERROR: output load addresses differ from stock header: actual={actual}, expected={expected}.')
+          print(f'Boot image structural check OK: v{header_version}, page={page_size}, kernel={kernel_size}@{kernel_addr:#x}, ramdisk={ramdisk_size}@{ramdisk_addr:#x}, dtb={dtb_size}@{dtb_addr:#x}.')
+          PY
+          TREE="$GITHUB_WORKSPACE/OrangeFox/fox_${MANIFEST_BRANCH}/$DEVICE_PATH"
+          python3 "$TREE/tools/strict_x6515_validator.py" --mode image --device-tree "$TREE" --image "$IMAGE"
+          echo '::warning::This is a build candidate only. No physical-device feature test has been run; do not describe it as 100% compatible.'
           file "$IMAGE"
           sha256sum "$IMAGE" | tee "$IMAGE.sha256"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
@@ -276,9 +398,25 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OrangeFox-${{ inputs.DEVICE_NAME }}-${{ inputs.MANIFEST_BRANCH }}-${{ github.run_number }}
+          name: OrangeFox-CANDIDATE-${{ inputs.DEVICE_NAME }}-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.SIZE_MODE }}-${{ github.run_number }}
           path: |
             ${{ steps.image.outputs.image }}
             ${{ steps.image.outputs.image }}.sha256
+            manifest.lock.xml
+            orangefox-sync.commit
+            device-tree.commit
+            provenance.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Record certification boundary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo '## Validation status'
+            echo '- Source and built-image static checks passed.'
+            echo '- This artifact is a **candidate**, not a device-certified recovery.'
+            echo '- Physical tests, intact super/vendor evidence, and vendor crypto/TEE verification are required for release certification.'
+            echo '- See the device-tree `docs/STRICT-VALIDATION.md` for the fail-closed release gate and test matrix.'
+          } >> "$GITHUB_STEP_SUMMARY"

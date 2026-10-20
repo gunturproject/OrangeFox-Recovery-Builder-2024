@@ -1,113 +1,40 @@
-# compile OrangeFox Recovery with Github Actions
-```
-only Supports OrangeFox  (14.1 is not ready yet) / 12.1 / 11
-**************
-*** WARNING***: the fox_14.1 branch is *EXPERIMENTAL*! Also, syncing will take a *VERY* long time
-**************
-```
-![cap_sprout](https://wiki.orangefox.tech/banner.svg)
----
-# Features
-Auto updates in background/
-Installing old releases/
-Ability to create and edit OpenRecoveryScripts/
-Beautiful UI/
-No analytics/ads, small apk size/
-Internal Storage (Yes, decryption works!)/
-External Storage (Both OTG and MicroSD.)/
-Touchpanel/
-Brightness/
-Vibration/Haptic/
-ADB Sideload/
-MTP/
-Flashlight/
-Synced with the latest Teamwin changes/
-Designed with latest Material design 2 guidelines/
-Implemented support for Flyme and MIUI OTA, and incremental block-based OTA in custom ROMs/
-Included assorted customizations/
-Inbuilt patches, like Magisk and password reset patch/
-Several addons/
-Password protection/
-Fully open-source/
-Frequently updated/
-# Why OrangeFox Recovery?
-We have been operating since early 2018. Since then we have improved the quality, stability, and device support of the recovery. Today OrangeFox is the leader in stability, UI design, and UX. Installing OrangeFox means being with the latest code and fastest fixes.
+# OrangeFox 12.1 builder for Infinix X6515
 
-OrangeFox Recovery was originally designed for Xiaomi Redmi Note 4X Snapdragon (mido). Right now we support 50+ devices, with more than 5 million downloads from our official download server.
+This GitHub Actions workflow builds an OrangeFox recovery-as-boot image for the X6515/H6127 Android 12 firmware targeted by the device tree. It is a build and static-validation workflow, not a device certification or flashing workflow.
 
+## Run
 
-## Release Notes
-```
-= 2025-07-19
-- fix problem with device tree link in release!
+Open **Actions → OrangeFox - Build X6515 → Run workflow**. Reviewed defaults are:
 
-= 2024-10-21
-- Fix issue with Snapdragon Gen 7/8 devices
+- OrangeFox manifest: `12.1` (`fox_12.1`)
+- Device tree: `gunturproject/android_device_infinix_Infinix-X6515`
+- Device tree branch: `manus/x6515-boot-offset-audit-20261020` (review branch)
+- Target: `bootimage` (recovery-as-boot)
+- Size mode: `standard`
+- Repo sync jobs: `16`
 
-= 2024-10-06
-- fix some errors
-- fix problems with vendor_boot
-- Include Recovery to tar for Samsung devices
-- Include recovery installer zip
-- LDCheck for checking missing dependencies.
-- Clarify options in README
-- Increase swap size for kernel inline builds
-- Remove common tree input fields (not needed)
-- Fix build with Omni manifests
-- Update ubuntu to latest version 
-- Updated to work with Android 14 AOSP minimal TWRP manifest
-- Completely reconstruct the use logic to reduce the difficulty of use
-- Optimize the parameter transfer part, now you can run multiple Workers at the same time
-```
+Inputs are passed through environment variables, validated, and shell-quoted before use. This workflow only accepts HTTPS GitHub repositories, normalized relative tree paths, the X6515 device name, the reviewed OrangeFox 12.1 manifest, and the bootimage target.
 
------
+## Image-size modes
 
-## Output will be like this
-![](https://s3.bmp.ovh/imgs/2024/10/07/3913c62d5c20649f.png)
+`standard` is the default and preserves normal OrangeFox extras. The stock `boot_a` and `boot_b` partitions are 32 MiB, so the workflow rejects any output larger than 33,554,432 bytes and checks the Android boot-image header/components before uploading it.
 
-## Parameter Description
-| Name | Description | Example |
-| ------------ | -------------------- | ------------ |
-| `MANIFEST_BRANCH` | Source branch | OrangeFox-12.1 |
-| `DEVICE_TREE_URL` | Device tree address | https://github.com/kinguser981/android_device_samsung_a05s.git |
-| `DEVICE_TREE_BRANCH` | Device branch that you want to use for build (typically corresponds to the manifest branch) | android-12.1 |
-| `DEVICE_PATH` | Device tree location for syncing, relative to workspace root (usually listed as "LOCAL_PATH" or "DEVICE_PATH" in BoardConfig.mk) | device/samsung/a05s |
-| `DEVICE_NAME` | Model name (same as twrp_`<DEVICE_NAME>`.mk from device tree) | a05s |
-| `DEVICE_MAKEFILE` | Name of device-specific makefile from tree (format: `<PREFIX>_<DEVICE_NAME>`) | fox_a05s.mk
-| `BUILD_TARGET` | Build Target Partition (boot/recovery/vendor_boot) | recovery |
-| `RECOVERY_INSTALLER` | Include recovery installer zip | Optional |
-| `RECOVERY_TAR` | Recovery to tar for Samsung devices | Optional |
+`drastic` sets OrangeFox's experimental `FOX_DRASTIC_SIZE_REDUCTION=1`. Upstream documents that mode as a last resort because it removes many OrangeFox extra binaries and needs extensive feature testing. Use it only if a standard build exceeds the device's fixed partition limit; a smaller image is not automatically a better or smoother recovery.
 
------
+The workflow uses the OrangeFox vanilla profile and disables MIUI-specific features for this non-Xiaomi A/B device. It does not enable LZMA ramdisk compression. Theme rendering and responsiveness still need measurement on the physical phone.
 
-## Usage Instructions
+## Validation and artifacts
 
-#### 1. Click 'Fork' in the upper right corner of this repo
-![](https://s3.bmp.ovh/imgs/2024/09/07/acd37b59bde6971e.png)
-#### 2. After waiting for the automatic redirection, you will see your own username
-## Building the Recovery
-#### 3. Click on 'Actions' then Click no 'OrangeFox - Build'
-![](https://s3.bmp.ovh/imgs/2024/10/07/fc95db719a8603e4.png)
-#### 4. Click 'Run workflow', choose the branch for the recovery that you want to build, and fill in according to the above 'Parameter Description'
-![](https://s3.bmp.ovh/imgs/2024/10/08/b0914297dd7ec359.png)
-#### 5. After filling in, click 'Run workflow' to start running
+Before compiling, CI runs the strict source-tree validator and its Python regression suite, then checks the X6515 product/tree identity, MT6761 target, prebuilt kernel and DTB hashes, boot header v2 parameters, explicit kernel/ramdisk/tags/DTB offsets, the 32 MiB partition limit, F2FS and fstab crypto configuration, stock fingerprint, and selected recovery modules. After building, it verifies the output boot header, component ranges, stock-derived kernel/DTB identity, gzip/newc ramdisk, init files, and required executables. It records the device-tree commit, OrangeFox sync-script commit, resolved `manifest.lock.xml`, build provenance, image SHA-256, and image artifact. Output validation is structural only; CI does not boot or flash the image.
 
------
+The artifact is named `OrangeFox-CANDIDATE-...` and contains `boot.img`, its SHA-256 sidecar, source commit identifiers, provenance, and the resolved manifest lockfile. Builds are uploaded as workflow artifacts; this workflow does not publish a GitHub Release or flash a device. The workflow summary explicitly states that passing CI does not certify runtime features.
 
-## Compilation results
-Can be downloaded at [Release](../../releases)
+For the fail-closed release evidence gate, use the device tree's [strict validation guide](https://github.com/gunturproject/android_device_infinix_Infinix-X6515/blob/manus/x6515-boot-offset-audit-20261020/docs/STRICT-VALIDATION.md). It requires intact firmware plus hashed evidence for every required feature; those tests are not simulated or inferred by hosted CI.
 
------
-## Reference and Credits
-- https://github.com/that1
-- https://github.com/TeamWin
-- https://gitlab.com/OrangeFox
-- https://github.com/cd-Crypton
-- https://github.com/azwhikaru
-- And to all Contributors in every repositories and scripts I used.
+## Important compatibility limits
 
+A compile does not prove touchscreen, display, brightness, USB/ADB/MTP/OTG, slot switching, backup/restore, dynamic partitions, formatting, encryption/decryption, Keymaster/TEE, or AVB behavior. The device tree currently lacks an audited `proprietary-files.txt` and packaged vendor crypto/Keymaster/TEE services. Enabling crypto flags is not proof that encrypted `/data` will decrypt.
 
+The scatter file gives the physical `super` capacity but cannot prove logical partition extents; use a clean production `super.img` and `lpdump`. The supplied package lists A/B vendor_boot partitions but no vendor_boot image payload, so this workflow builds only `boot.img` and does not assert the contents or runtime role of vendor_boot.
 
-## Infinix X6515 workflow notes
-
-The workflow defaults are set to the X6515 device tree fork and its current branch. The tree advertises an `omni_Infinix-X6515` product and currently has no common Android file/metadata-encryption flags in `recovery.fstab`; therefore decryption is **not verified or promised**. A successful compile only proves that an image was produced. Validate boot, touch, ADB/MTP, partition access, backup/restore, flashing, reboot paths, and encrypted `/data` on the exact X6515 firmware before daily use. Never flash images from an unverified build; keep a stock firmware recovery path. The workflow reports crypto-related configuration and fails on missing required tree files or missing/empty output images. It uploads artifacts rather than publishing a release automatically. OrangeFox 14.1 is experimental upstream.
+Do not permanently flash an untested image. Keep and test a stock firmware recovery path, and validate all required functions on the exact X6515/H6127 firmware first. See the device-tree README, `tools/validate_x6515_firmware.py`, and `tools/strict_x6515_validator.py` for read-only firmware, source, and image checks.
