@@ -103,7 +103,8 @@ jobs:
       - name: Build OrangeFox recovery
         shell: bash
         run: |
-          set -euo pipefail
+          # Android envsetup intentionally references unset variables while initializing.
+          set -eo pipefail
           cd "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
