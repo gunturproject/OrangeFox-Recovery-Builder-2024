@@ -139,7 +139,8 @@ jobs:
           test -s AndroidProducts.mk
           echo "DEVICE_TREE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
-          grep -q 'PRODUCT_MODEL := Infinix X6515' omni_Infinix-X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
+          grep -q 'PRODUCT_MODEL := Infinix X6515' omni_Infinix_X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
+          grep -q 'PRODUCT_NAME := omni_Infinix_X6515' omni_Infinix_X6515.mk || { echo 'ERROR: Android product name must use the underscore-safe identifier.'; exit 1; }
           grep -Eq '^BOARD_SUPER_PARTITION_SIZE[[:space:]]*:=[[:space:]]*6723633152([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: BOARD_SUPER_PARTITION_SIZE differs from stock scatter (0x190c28000).'; exit 1; }
           grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition group size must preserve the verified 4 MiB headroom within stock SUPER.'; exit 1; }
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
@@ -149,12 +150,12 @@ jobs:
           echo "$DATA_FSTAB" | grep -q 'keydirectory=/metadata/vold/metadata_encryption' || { echo 'ERROR: stock XOS keydirectory is missing'; exit 1; }
           echo '--- Product makefiles ---'
           cat AndroidProducts.mk
-          TREE_FP=$(sed -n 's/^BUILD_FINGERPRINT := //p' omni_Infinix-X6515.mk | head -1)
+          TREE_FP=$(sed -n 's/^BUILD_FINGERPRINT := //p' omni_Infinix_X6515.mk | head -1)
           EXPECTED_FP='Infinix/X6515-OP/Infinix-X6515:12/SP1A.210812.016/241204V944:user/release-keys'
           echo "Tree fingerprint: ${TREE_FP:-not declared}"
           echo "Stock firmware fingerprint from supplied boot image: $EXPECTED_FP"
           [[ "$TREE_FP" == "$EXPECTED_FP" ]] || { echo 'ERROR: device tree fingerprint does not match the supplied stock XOS firmware; update/review the tree before building.'; exit 1; }
-          grep -Fq 'PRIVATE_BUILD_DESC="vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys"' omni_Infinix-X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
+          grep -Fq 'PRIVATE_BUILD_DESC="vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys"' omni_Infinix_X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
           echo '--- Userdata fstab line ---'
           if grep -E 'fileencryption|metadata_encryption|encryptable=|forceencrypt=|wrappedkey|keydirectory=' recovery.fstab; then
             echo 'Encryption-related fstab flags are present; runtime decryption still requires on-device tests.'
@@ -191,7 +192,7 @@ jobs:
             echo 'ERROR: envsetup did not define the lunch function; stopping before compilation.'
             exit 1
           fi
-          if ! lunch omni_${{ inputs.DEVICE_NAME }}-eng; then
+          if ! lunch omni_Infinix_X6515-eng; then
             echo 'ERROR: requested omni device lunch target is unavailable or its product config failed.'
             exit 1
           fi
