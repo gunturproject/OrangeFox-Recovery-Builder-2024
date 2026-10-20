@@ -26,11 +26,11 @@ on:
         required: true
         default: 'Infinix-X6515'
       BUILD_TARGET:
-        description: 'Image target'
+        description: 'Recovery-as-boot image target'
         required: true
-        default: 'recoveryimage'
+        default: 'bootimage'
         type: choice
-        options: ['recoveryimage']
+        options: ['bootimage']
       REPO_SYNC_JOBS:
         description: 'Parallel repository sync jobs (increase carefully if network/disk is constrained)'
         required: true
@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           [[ '${{ inputs.DEVICE_PATH }}' =~ ^[A-Za-z0-9_./-]+$ ]]
           [[ '${{ inputs.DEVICE_NAME }}' =~ ^[A-Za-z0-9_-]+$ ]]
-          [[ '${{ inputs.BUILD_TARGET }}' == 'recoveryimage' ]]
+          [[ '${{ inputs.BUILD_TARGET }}' == 'bootimage' ]]
           [[ '${{ inputs.REPO_SYNC_JOBS }}' =~ ^([2-9]|1[0-9]|2[0-4])$ ]]
 
       - name: Free disk space safely
@@ -131,6 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
+          test -s vendor/twrp/config/common.mk || { echo 'ERROR: OrangeFox/TWRP common product config is missing from the synced manifest.'; exit 1; }
           mkdir -p "$(dirname '${{ inputs.DEVICE_PATH }}')"
           git clone --depth=1 --branch '${{ inputs.DEVICE_TREE_BRANCH }}' '${{ inputs.DEVICE_TREE }}' '${{ inputs.DEVICE_PATH }}'
           cd '${{ inputs.DEVICE_PATH }}'
@@ -139,8 +140,14 @@ jobs:
           test -s AndroidProducts.mk
           echo "DEVICE_TREE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
-          grep -q 'PRODUCT_MODEL := Infinix X6515' omni_Infinix_X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
-          grep -q 'PRODUCT_NAME := omni_Infinix_X6515' omni_Infinix_X6515.mk || { echo 'ERROR: Android product name must use the underscore-safe identifier.'; exit 1; }
+          grep -q 'PRODUCT_MODEL := Infinix X6515' twrp_Infinix_X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
+          grep -q 'PRODUCT_NAME := twrp_Infinix_X6515' twrp_Infinix_X6515.mk || { echo 'ERROR: Android product name must match the TWRP product target.'; exit 1; }
+          grep -Fq 'vendor/twrp/config/common.mk' twrp_Infinix_X6515.mk || { echo 'ERROR: product does not inherit the synced TWRP common config.'; exit 1; }
+          grep -Fq '$(LOCAL_DIR)/twrp_Infinix_X6515.mk' AndroidProducts.mk || { echo 'ERROR: AndroidProducts.mk does not register the TWRP product makefile.'; exit 1; }
+          grep -Fq 'COMMON_LUNCH_CHOICES := twrp_Infinix_X6515-eng' AndroidProducts.mk || { echo 'ERROR: expected TWRP eng lunch target is missing.'; exit 1; }
+          grep -Eq '^BOARD_USES_RECOVERY_AS_BOOT[[:space:]]*:=[[:space:]]*true([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: X6515 is expected to package recovery into boot.img.'; exit 1; }
+          if grep -Eq '^BOARD_RECOVERYIMAGE_PARTITION_SIZE[[:space:]]*:=' BoardConfig.mk; then echo 'ERROR: separate recovery partition size conflicts with X6515 recovery-as-boot layout.'; exit 1; fi
+          if grep -q 'ALLOW_MISSING_DEPENDENCIES' BoardConfig.mk; then echo 'ERROR: allow-missing-dependencies weakens strict module validation.'; exit 1; fi
           if grep -q 'PRODUCT_STATIC_BOOT_CONTROL_HAL' device.mk; then echo 'ERROR: obsolete static boot-control HAL property must not be used.'; exit 1; fi
           grep -Fq 'android.hardware.boot@1.0-impl.recovery' device.mk || { echo 'ERROR: recovery boot HAL implementation variant is missing.'; exit 1; }
           grep -Fq 'bootctrl.mt6761.recovery' device.mk || { echo 'ERROR: MT6761 recovery boot-control HAL variant is missing.'; exit 1; }
@@ -153,12 +160,12 @@ jobs:
           echo "$DATA_FSTAB" | grep -q 'keydirectory=/metadata/vold/metadata_encryption' || { echo 'ERROR: stock XOS keydirectory is missing'; exit 1; }
           echo '--- Product makefiles ---'
           cat AndroidProducts.mk
-          TREE_FP=$(sed -n 's/^BUILD_FINGERPRINT := //p' omni_Infinix_X6515.mk | head -1)
+          TREE_FP=$(sed -n 's/^BUILD_FINGERPRINT := //p' twrp_Infinix_X6515.mk | head -1)
           EXPECTED_FP='Infinix/X6515-OP/Infinix-X6515:12/SP1A.210812.016/241204V944:user/release-keys'
           echo "Tree fingerprint: ${TREE_FP:-not declared}"
           echo "Stock firmware fingerprint from supplied boot image: $EXPECTED_FP"
           [[ "$TREE_FP" == "$EXPECTED_FP" ]] || { echo 'ERROR: device tree fingerprint does not match the supplied stock XOS firmware; update/review the tree before building.'; exit 1; }
-          grep -Fq 'PRIVATE_BUILD_DESC="vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys"' omni_Infinix_X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
+          grep -Fq 'PRIVATE_BUILD_DESC="vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys"' twrp_Infinix_X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
           echo '--- Userdata fstab line ---'
           if grep -E 'fileencryption|metadata_encryption|encryptable=|forceencrypt=|wrappedkey|keydirectory=' recovery.fstab; then
             echo 'Encryption-related fstab flags are present; runtime decryption still requires on-device tests.'
@@ -185,7 +192,6 @@ jobs:
           # Official guidance recommends vanilla mode and disabling MIUI-only features for non-Xiaomi devices.
           export FOX_VANILLA_BUILD=1
           export OF_DISABLE_MIUI_SPECIFIC_FEATURES=1
-          export ALLOW_MISSING_DEPENDENCIES=true
           set +e
           source build/envsetup.sh
           ENVSETUP_RC=$?
@@ -195,11 +201,11 @@ jobs:
             echo 'ERROR: envsetup did not define the lunch function; stopping before compilation.'
             exit 1
           fi
-          if ! lunch omni_Infinix_X6515-eng; then
-            echo 'ERROR: requested omni device lunch target is unavailable or its product config failed.'
+          if ! lunch twrp_Infinix_X6515-eng; then
+            echo 'ERROR: requested TWRP device lunch target is unavailable or its product config failed.'
             exit 1
           fi
-          mka -j2 adbd recoveryimage
+          mka -j2 adbd '${{ inputs.BUILD_TARGET }}'
 
       - name: Validate output image
         id: image
@@ -207,12 +213,9 @@ jobs:
         run: |
           set -euo pipefail
           OUT="$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ inputs.DEVICE_NAME }}"
-          IMAGE="$OUT/recovery.img"
+          IMAGE="$OUT/boot.img"
           if [[ ! -s "$IMAGE" ]]; then
-            IMAGE=$(find "$OUT" -maxdepth 1 -type f -name 'OrangeFox*.img' -size +0c -print -quit)
-          fi
-          if [[ ! -s "$IMAGE" ]]; then
-            echo 'ERROR: expected output image is missing or empty.'
+            echo 'ERROR: expected non-empty boot.img recovery-as-boot output is missing.'
             find "$OUT" -maxdepth 3 -type f -printf '%p (%s bytes)\n' 2>/dev/null || true
             exit 1
           fi
