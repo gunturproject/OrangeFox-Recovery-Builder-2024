@@ -34,7 +34,7 @@ on:
       REPO_SYNC_JOBS:
         description: 'Parallel repository sync jobs (increase carefully if network/disk is constrained)'
         required: true
-        default: 8
+        default: 16
         type: number
 
 permissions:
@@ -60,7 +60,7 @@ jobs:
           [[ '${{ inputs.DEVICE_PATH }}' =~ ^[A-Za-z0-9_./-]+$ ]]
           [[ '${{ inputs.DEVICE_NAME }}' =~ ^[A-Za-z0-9_-]+$ ]]
           [[ '${{ inputs.BUILD_TARGET }}' == 'recoveryimage' ]]
-          [[ '${{ inputs.REPO_SYNC_JOBS }}' =~ ^([2-9]|1[0-6])$ ]]
+          [[ '${{ inputs.REPO_SYNC_JOBS }}' =~ ^([2-9]|1[0-9]|2[0-4])$ ]]
 
       - name: Free disk space safely
         shell: bash
@@ -101,7 +101,9 @@ jobs:
           REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
         run: |
           set -euo pipefail
-          git config --global http.maxRequests 16
+          git config --global http.maxRequests 32
+          git config --global http.lowSpeedLimit 1000
+          git config --global http.lowSpeedTime 600
           mkdir -p "$GITHUB_WORKSPACE/OrangeFox"
           git clone --depth=1 https://gitlab.com/OrangeFox/sync.git "$RUNNER_TEMP/of-sync"
           cp -a "$RUNNER_TEMP/of-sync/patches" "$GITHUB_WORKSPACE/patches"
@@ -109,10 +111,26 @@ jobs:
           import pathlib, sys
           path = pathlib.Path(sys.argv[1])
           text = path.read_text()
-          old = 'repo sync --force-sync -c -j$(nproc --all) --no-clone-bundle --no-tags "$@";'
-          new = 'repo sync --force-sync -c -j${REPO_SYNC_JOBS:-$(nproc --all)} --no-clone-bundle --no-tags "$@";'
+          old = '''repo_sync() {
+	repo sync --force-sync -c -j$(nproc --all) --no-clone-bundle --no-tags "$@";
+}'''
+          new = '''repo_sync() {
+	local attempt=1
+	local rc=0
+	while [ "$attempt" -le 3 ]; do
+		if repo sync --force-sync -c -j${REPO_SYNC_JOBS:-$(nproc --all)} --no-clone-bundle --no-tags "$@"; then
+			return 0
+		else
+			rc=$?
+		fi
+		echo "repo sync failed (attempt $attempt/3, rc=$rc); retrying after backoff"
+		sleep $((attempt * 15))
+		attempt=$((attempt + 1))
+	done
+	return "$rc"
+}'''
           if old not in text:
-              raise SystemExit('OrangeFox sync script changed; refusing an unverified patch')
+              raise SystemExit('OrangeFox repo_sync function changed; refusing an unverified retry patch')
           path.write_text(text.replace(old, new, 1))
           PYCODE
           bash "$RUNNER_TEMP/of-sync/orangefox_sync.sh" --branch '${{ inputs.MANIFEST_BRANCH }}' --path "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
@@ -169,12 +187,23 @@ jobs:
       - name: Build OrangeFox recovery
         shell: bash
         run: |
-          # Android envsetup intentionally references unset variables while initializing.
-          set -eo pipefail
+          # Capture envsetup's return before errexit; some vendor setup scripts return nonzero after registering helpers.
+          set -o pipefail
           cd "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
-          source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
-          lunch omni_${{ inputs.DEVICE_NAME }}-eng
+          set +e
+          source build/envsetup.sh
+          ENVSETUP_RC=$?
+          set -e
+          echo "build/envsetup.sh returned $ENVSETUP_RC"
+          if ! declare -F lunch >/dev/null; then
+            echo 'ERROR: envsetup did not define the lunch function; stopping before compilation.'
+            exit 1
+          fi
+          if ! lunch omni_${{ inputs.DEVICE_NAME }}-eng; then
+            echo 'ERROR: requested omni device lunch target is unavailable or its product config failed.'
+            exit 1
+          fi
           mka -j2 adbd recoveryimage
 
       - name: Validate output image
