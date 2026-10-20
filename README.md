@@ -106,3 +106,8 @@ Can be downloaded at [Release](../../releases)
 - https://github.com/azwhikaru
 - And to all Contributors in every repositories and scripts I used.
 
+
+
+## Infinix X6515 workflow notes
+
+The workflow defaults are set to the X6515 device tree fork and its current branch. The tree advertises an `omni_Infinix-X6515` product and currently has no common Android file/metadata-encryption flags in `recovery.fstab`; therefore decryption is **not verified or promised**. A successful compile only proves that an image was produced. Validate boot, touch, ADB/MTP, partition access, backup/restore, flashing, reboot paths, and encrypted `/data` on the exact X6515 firmware before daily use. Never flash images from an unverified build; keep a stock firmware recovery path. The workflow reports crypto-related configuration and fails on missing required tree files or missing/empty output images. It uploads artifacts rather than publishing a release automatically. OrangeFox 14.1 is experimental upstream.
