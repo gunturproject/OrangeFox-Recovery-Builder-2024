@@ -161,6 +161,8 @@ jobs:
           grep -Fq 'bootctrl.mt6761.recovery' device.mk || { echo 'ERROR: MT6761 recovery boot-control HAL variant is missing.'; exit 1; }
           grep -Fq 'TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"' BoardConfig.mk || { echo 'ERROR: stock MTK lcd-backlight sysfs path is not configured.'; exit 1; }
           grep -Eq '^TW_MAX_BRIGHTNESS[[:space:]]*:=[[:space:]]*255([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: X6515 MTK LED-class range must be configured as 0-255.'; exit 1; }
+          grep -Fxq 'TW_INCLUDE_CRYPTO := true' BoardConfig.mk || { echo 'ERROR: stock XOS encrypted /data requires recovery crypto support.'; exit 1; }
+          grep -Fxq 'TW_INCLUDE_FBE_METADATA_DECRYPT := true' BoardConfig.mk || { echo 'ERROR: stock XOS FBE requires metadata-decryption support in recovery.'; exit 1; }
           test -s prebuilt/kernel || { echo 'ERROR: X6515 prebuilt kernel is missing.'; exit 1; }
           echo '541bed276dd57d97ab249bc25e123b595f4c8d78a17ac2fa816802a7b565689e  prebuilt/kernel' | sha256sum -c -
           echo 'be65cfd3bbe139701b6377ebaa5a71f960e710e911ab247c76b8df56db447b01  prebuilt/dtb.img' | sha256sum -c -
