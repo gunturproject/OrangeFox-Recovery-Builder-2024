@@ -171,6 +171,7 @@ jobs:
           rm -f "$KERNEL_RAW"
           grep -Eq '^BOARD_SUPER_PARTITION_SIZE[[:space:]]*:=[[:space:]]*6723633152([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: BOARD_SUPER_PARTITION_SIZE differs from stock scatter (0x190c28000).'; exit 1; }
           grep -Eq '^BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE[[:space:]]*:=[[:space:]]*6719438848([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: dynamic-partition group size must preserve the verified 4 MiB headroom within stock SUPER.'; exit 1; }
+          grep -Fxq 'BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs' BoardConfig.mk || { echo 'ERROR: userdata image filesystem must match stock XOS F2FS.'; exit 1; }
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
           [[ -n "$DATA_FSTAB" ]] || { echo 'ERROR: no /data mount in recovery.fstab'; exit 1; }
           echo "$DATA_FSTAB" | grep -q 'f2fs' || { echo 'ERROR: /data filesystem differs from stock XOS f2fs'; exit 1; }
