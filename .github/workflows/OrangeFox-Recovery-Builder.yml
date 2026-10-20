@@ -31,6 +31,11 @@ on:
         default: 'recoveryimage'
         type: choice
         options: ['recoveryimage', 'bootimage', 'vendorbootimage']
+      REPO_SYNC_JOBS:
+        description: 'Parallel repository sync jobs (increase carefully if network/disk is constrained)'
+        required: true
+        default: 8
+        type: number
 
 permissions:
   contents: read
@@ -55,6 +60,19 @@ jobs:
           [[ '${{ inputs.DEVICE_PATH }}' =~ ^[A-Za-z0-9_./-]+$ ]]
           [[ '${{ inputs.DEVICE_NAME }}' =~ ^[A-Za-z0-9_-]+$ ]]
           [[ '${{ inputs.BUILD_TARGET }}' =~ ^(recoveryimage|bootimage|vendorbootimage)$ ]]
+          [[ '${{ inputs.REPO_SYNC_JOBS }}' =~ ^([2-9]|1[0-6])$ ]]
+
+      - name: Free disk space safely
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Disk before cleanup:'
+          df -h "$GITHUB_WORKSPACE"
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup
+          if command -v docker >/dev/null 2>&1; then sudo docker system prune -af --volumes || true; fi
+          echo 'Disk after cleanup:'
+          df -h "$GITHUB_WORKSPACE"
 
       - name: Prepare build host
         run: |
@@ -65,12 +83,32 @@ jobs:
 
       - name: Sync OrangeFox manifest
         shell: bash
+        env:
+          REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
         run: |
           set -euo pipefail
+          git config --global http.maxRequests 16
           mkdir -p "$GITHUB_WORKSPACE/OrangeFox"
           git clone --depth=1 https://gitlab.com/OrangeFox/sync.git "$RUNNER_TEMP/of-sync"
           cp -a "$RUNNER_TEMP/of-sync/patches" "$GITHUB_WORKSPACE/patches"
+          python3 - "$RUNNER_TEMP/of-sync/orangefox_sync.sh" <<'PYCODE'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          old = 'repo sync --force-sync -c -j$(nproc --all) --no-clone-bundle --no-tags "$@";'
+          new = 'repo sync --force-sync -c -j${REPO_SYNC_JOBS:-$(nproc --all)} --no-clone-bundle --no-tags "$@";'
+          if old not in text:
+              raise SystemExit('OrangeFox sync script changed; refusing an unverified patch')
+          path.write_text(text.replace(old, new, 1))
+          PYCODE
           bash "$RUNNER_TEMP/of-sync/orangefox_sync.sh" --branch '${{ inputs.MANIFEST_BRANCH }}' --path "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}"
+
+      - name: Report disk usage after manifest sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$GITHUB_WORKSPACE"
+          du -sh "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}" "$GITHUB_WORKSPACE/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/.repo" 2>/dev/null || true
 
       - name: Fetch and audit X6515 device tree
         shell: bash
@@ -84,10 +122,23 @@ jobs:
           test -s recovery.fstab
           test -s AndroidProducts.mk
           echo "DEVICE_TREE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
+          grep -q 'PRODUCT_MODEL := Infinix X6515' omni_Infinix-X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
+          DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
+          [[ -n "$DATA_FSTAB" ]] || { echo 'ERROR: no /data mount in recovery.fstab'; exit 1; }
+          echo "$DATA_FSTAB" | grep -q 'f2fs' || { echo 'ERROR: /data filesystem differs from stock XOS f2fs'; exit 1; }
+          echo "$DATA_FSTAB" | grep -q 'fileencryption=aes-256-xts:aes-256-cts:v2' || { echo 'ERROR: stock XOS fileencryption config is missing'; exit 1; }
+          echo "$DATA_FSTAB" | grep -q 'keydirectory=/metadata/vold/metadata_encryption' || { echo 'ERROR: stock XOS keydirectory is missing'; exit 1; }
           echo '--- Product makefiles ---'
           cat AndroidProducts.mk
+          TREE_FP=$(sed -n 's/^BUILD_FINGERPRINT := //p' omni_Infinix-X6515.mk | head -1)
+          EXPECTED_FP='Infinix/X6515-OP/Infinix-X6515:12/SP1A.210812.016/241204V944:user/release-keys'
+          echo "Tree fingerprint: ${TREE_FP:-not declared}"
+          echo "Stock firmware fingerprint from supplied boot image: $EXPECTED_FP"
+          if [[ "$TREE_FP" != "$EXPECTED_FP" ]]; then
+            echo '::warning title=Firmware/tree mismatch::Device tree fingerprint differs from supplied stock XOS build. This is a review warning, not proof of incompatibility; do not flash without matching-firmware device tests.'
+          fi
           echo '--- Userdata fstab line ---'
-          grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || { echo 'ERROR: no /data mount in recovery.fstab'; exit 1; }
           if grep -E 'fileencryption|metadata_encryption|encryptable=|forceencrypt=|wrappedkey|keydirectory=' recovery.fstab; then
             echo 'Encryption-related fstab flags are present; runtime decryption still requires on-device tests.'
           else
