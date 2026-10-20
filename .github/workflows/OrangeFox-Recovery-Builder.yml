@@ -141,11 +141,19 @@ jobs:
           echo "DEVICE_TREE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           grep -Eq '^TARGET_BOARD_PLATFORM[[:space:]]*:=[[:space:]]*mt6761([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: device tree SoC does not match MT6761'; exit 1; }
           grep -q 'PRODUCT_MODEL := Infinix X6515' twrp_Infinix_X6515.mk || { echo 'ERROR: product model is not Infinix X6515'; exit 1; }
+          grep -Fxq 'PRODUCT_BRAND := Infinix' twrp_Infinix_X6515.mk || { echo 'ERROR: product brand differs from stock XOS.'; exit 1; }
+          grep -Fxq 'PRODUCT_MANUFACTURER := INFINIX' twrp_Infinix_X6515.mk || { echo 'ERROR: manufacturer must match stock XOS property INFINIX.'; exit 1; }
           grep -q 'PRODUCT_NAME := twrp_Infinix_X6515' twrp_Infinix_X6515.mk || { echo 'ERROR: Android product name must match the TWRP product target.'; exit 1; }
           grep -Fq 'vendor/twrp/config/common.mk' twrp_Infinix_X6515.mk || { echo 'ERROR: product does not inherit the synced TWRP common config.'; exit 1; }
           grep -Fq '$(LOCAL_DIR)/twrp_Infinix_X6515.mk' AndroidProducts.mk || { echo 'ERROR: AndroidProducts.mk does not register the TWRP product makefile.'; exit 1; }
           grep -Fq 'COMMON_LUNCH_CHOICES := twrp_Infinix_X6515-eng' AndroidProducts.mk || { echo 'ERROR: expected TWRP eng lunch target is missing.'; exit 1; }
           grep -Eq '^BOARD_USES_RECOVERY_AS_BOOT[[:space:]]*:=[[:space:]]*true([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: X6515 is expected to package recovery into boot.img.'; exit 1; }
+          grep -Fxq 'BOARD_BOOTIMG_HEADER_VERSION := 2' BoardConfig.mk || { echo 'ERROR: boot header version differs from stock X6515 header v2.'; exit 1; }
+          grep -Fxq 'BOARD_KERNEL_BASE := 0x40078000' BoardConfig.mk || { echo 'ERROR: kernel base differs from stock boot header.'; exit 1; }
+          grep -Fxq 'BOARD_KERNEL_PAGESIZE := 2048' BoardConfig.mk || { echo 'ERROR: kernel page size differs from stock boot header.'; exit 1; }
+          grep -Fxq 'BOARD_RAMDISK_OFFSET := 0x11a88000' BoardConfig.mk || { echo 'ERROR: ramdisk offset differs from stock boot header.'; exit 1; }
+          grep -Fxq 'BOARD_KERNEL_TAGS_OFFSET := 0x07808000' BoardConfig.mk || { echo 'ERROR: tags offset differs from stock boot header.'; exit 1; }
+          grep -Fxq 'BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432' BoardConfig.mk || { echo 'ERROR: boot_a is exactly 32 MiB; do not enlarge its declared size.'; exit 1; }
           if grep -Eq '^BOARD_RECOVERYIMAGE_PARTITION_SIZE[[:space:]]*:=' BoardConfig.mk; then echo 'ERROR: separate recovery partition size conflicts with X6515 recovery-as-boot layout.'; exit 1; fi
           if grep -q 'ALLOW_MISSING_DEPENDENCIES' BoardConfig.mk; then echo 'ERROR: allow-missing-dependencies weakens strict module validation.'; exit 1; fi
           if grep -q 'PRODUCT_STATIC_BOOT_CONTROL_HAL' device.mk; then echo 'ERROR: obsolete static boot-control HAL property must not be used.'; exit 1; fi
@@ -154,6 +162,8 @@ jobs:
           grep -Fq 'TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"' BoardConfig.mk || { echo 'ERROR: stock MTK lcd-backlight sysfs path is not configured.'; exit 1; }
           grep -Eq '^TW_MAX_BRIGHTNESS[[:space:]]*:=[[:space:]]*255([[:space:]]|$)' BoardConfig.mk || { echo 'ERROR: X6515 MTK LED-class range must be configured as 0-255.'; exit 1; }
           test -s prebuilt/kernel || { echo 'ERROR: X6515 prebuilt kernel is missing.'; exit 1; }
+          echo '541bed276dd57d97ab249bc25e123b595f4c8d78a17ac2fa816802a7b565689e  prebuilt/kernel' | sha256sum -c -
+          echo 'be65cfd3bbe139701b6377ebaa5a71f960e710e911ab247c76b8df56db447b01  prebuilt/dtb.img' | sha256sum -c -
           KERNEL_RAW="$(mktemp)"
           if gzip -t prebuilt/kernel >/dev/null 2>&1; then gzip -dc prebuilt/kernel > "$KERNEL_RAW"; else cp prebuilt/kernel "$KERNEL_RAW"; fi
           strings -a "$KERNEL_RAW" | grep -Fq 'lcd-backlight' || { rm -f "$KERNEL_RAW"; echo 'ERROR: prebuilt kernel lacks the expected lcd-backlight marker.'; exit 1; }
@@ -164,8 +174,10 @@ jobs:
           DATA_FSTAB=$(grep -E '^[[:space:]]*/data[[:space:]]' recovery.fstab || true)
           [[ -n "$DATA_FSTAB" ]] || { echo 'ERROR: no /data mount in recovery.fstab'; exit 1; }
           echo "$DATA_FSTAB" | grep -q 'f2fs' || { echo 'ERROR: /data filesystem differs from stock XOS f2fs'; exit 1; }
+          echo "$DATA_FSTAB" | grep -q 'formattable' || { echo 'ERROR: stock XOS declares /data formattable; recovery fstab is missing this feature.'; exit 1; }
           echo "$DATA_FSTAB" | grep -q 'fileencryption=aes-256-xts:aes-256-cts:v2' || { echo 'ERROR: stock XOS fileencryption config is missing'; exit 1; }
           echo "$DATA_FSTAB" | grep -q 'keydirectory=/metadata/vold/metadata_encryption' || { echo 'ERROR: stock XOS keydirectory is missing'; exit 1; }
+          grep -Eq '^/metadata[[:space:]]+ext4[[:space:]]+/dev/block/by-name/md_udc' recovery.fstab || { echo 'ERROR: /metadata block device differs from the stock XOS fstab.'; exit 1; }
           echo '--- Product makefiles ---'
           cat AndroidProducts.mk
           TREE_FP=$(sed -n 's/^BUILD_FINGERPRINT := //p' twrp_Infinix_X6515.mk | head -1)
@@ -174,6 +186,8 @@ jobs:
           echo "Stock firmware fingerprint from supplied boot image: $EXPECTED_FP"
           [[ "$TREE_FP" == "$EXPECTED_FP" ]] || { echo 'ERROR: device tree fingerprint does not match the supplied stock XOS firmware; update/review the tree before building.'; exit 1; }
           grep -Fq 'PRIVATE_BUILD_DESC="vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys"' twrp_Infinix_X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
+          grep -Fxq 'PLATFORM_SECURITY_PATCH := 2024-12-05' BoardConfig.mk || { echo 'ERROR: platform security patch must match XOS stock 2024-12-05.'; exit 1; }
+          grep -Fxq 'VENDOR_SECURITY_PATCH := 2024-12-05' BoardConfig.mk || { echo 'ERROR: vendor security patch must match XOS stock 2024-12-05.'; exit 1; }
           echo '--- Userdata fstab line ---'
           if grep -E 'fileencryption|metadata_encryption|encryptable=|forceencrypt=|wrappedkey|keydirectory=' recovery.fstab; then
             echo 'Encryption-related fstab flags are present; runtime decryption still requires on-device tests.'
