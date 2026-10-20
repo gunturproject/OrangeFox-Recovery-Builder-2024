@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
-        description: 'OrangeFox manifest branch (14.1 is experimental upstream)'
+        description: 'Stable OrangeFox branch; upstream sync currently supports 12.1 (14.1 intentionally excluded as experimental)'
         required: true
-        default: '14.1'
+        default: '12.1'
         type: choice
-        options: ['14.1', '12.1', '11.0']
+        options: ['12.1']
       DEVICE_TREE:
         description: 'Device tree repository'
         required: true
@@ -69,8 +69,18 @@ jobs:
           echo 'Disk before cleanup:'
           df -h "$GITHUB_WORKSPACE"
           sudo apt-get clean
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup
+          # Remove only known, unused hosted-runner toolchains/caches; retain Android SDK/build tools and GitHub runner assets.
+          for path in /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup /usr/local/share/chromium /usr/local/lib/android/sdk/system-images /usr/local/lib/android/sdk/emulator; do
+            if [[ -e "$path" ]]; then
+              echo "Removing unused runner payload: $path"
+              sudo rm -rf -- "$path"
+            fi
+          done
           if command -v docker >/dev/null 2>&1; then sudo docker system prune -af --volumes || true; fi
+          sudo rm -rf /var/lib/apt/lists/*
+          rm -rf "$HOME/.cache/pip" "$HOME/.cache/go-build" "$HOME/.gradle/caches" 2>/dev/null || true
+          echo 'Largest top-level runner directories after cleanup:'
+          sudo du -xhd1 /usr /opt /home/runner 2>/dev/null | sort -h | tail -25 || true
           echo 'Disk after cleanup:'
           df -h "$GITHUB_WORKSPACE"
 
@@ -80,6 +90,10 @@ jobs:
           sudo apt-get install -y git curl python3 zip unzip bc bison build-essential ccache flex g++-multilib gcc-multilib gperf imagemagick lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc yasm zip zlib1g-dev
           git clone --depth=1 https://gitlab.com/OrangeFox/misc/scripts.git "$RUNNER_TEMP/of-scripts"
           sudo bash "$RUNNER_TEMP/of-scripts/setup/android_build_env.sh"
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          echo 'Disk after build dependencies are installed:'
+          df -h "$GITHUB_WORKSPACE"
 
       - name: Sync OrangeFox manifest
         shell: bash
@@ -135,9 +149,8 @@ jobs:
           EXPECTED_FP='Infinix/X6515-OP/Infinix-X6515:12/SP1A.210812.016/241204V944:user/release-keys'
           echo "Tree fingerprint: ${TREE_FP:-not declared}"
           echo "Stock firmware fingerprint from supplied boot image: $EXPECTED_FP"
-          if [[ "$TREE_FP" != "$EXPECTED_FP" ]]; then
-            echo '::warning title=Firmware/tree mismatch::Device tree fingerprint differs from supplied stock XOS build. This is a review warning, not proof of incompatibility; do not flash without matching-firmware device tests.'
-          fi
+          [[ "$TREE_FP" == "$EXPECTED_FP" ]] || { echo 'ERROR: device tree fingerprint does not match the supplied stock XOS firmware; update/review the tree before building.'; exit 1; }
+          grep -q 'PRIVATE_BUILD_DESC=\"vnd_x6515_h6127-user 12 SP1A.210812.016 764070 release-keys\"' omni_Infinix-X6515.mk || { echo 'ERROR: private build description differs from the supplied stock boot image.'; exit 1; }
           echo '--- Userdata fstab line ---'
           if grep -E 'fileencryption|metadata_encryption|encryptable=|forceencrypt=|wrappedkey|keydirectory=' recovery.fstab; then
             echo 'Encryption-related fstab flags are present; runtime decryption still requires on-device tests.'
